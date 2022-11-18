@@ -1,0 +1,247 @@
+Parameters:
+  prefix:
+    Type: String
+    Description: Prefix name for the resources
+    Default: custom
+  sgCidr:
+    Type: String
+    Description: Custom Security Group IP Cidr Block
+    Default: 0.0.0.0/0
+  vpcCidrBlock:
+    Type: String
+    Description: VPC IP Cidr Block
+  subnetCidrBlocks:
+    Type: List<String>
+    Description: 4 Subnet IPs Cidr Blocks, comma separated
+  vpcCidrRange:
+    Type: String
+    Description: VPC IP Range
+    Default: 16
+  subnetCidrRange:
+    Type: String
+    Description: Subnet IP Range
+    Default: 24
+  createNatGateway:
+    Type: String
+    Description: Flag to create NatGateway
+    Default: false
+    AllowedValues:
+      - true
+      - false
+
+Conditions:
+  EnabledNatGateway: !Equals [ !Ref createNatGateway, 'true' ]
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Join ["/", [!Ref vpcCidrBlock, !Ref vpcCidrRange]]
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: "Name"
+          Value: !Join ["-", [!Ref prefix, "vpc"]]
+  
+  DMZSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName:  !Join ['-', [!Ref prefix, 'dmz-sg']]
+      GroupDescription: DMZ Security Group to allow Access to SSH
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - Description: Allow SSH
+          IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref sgCidr
+        - Description: Allow Http
+          IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: !Ref sgCidr
+        - Description: Allow Https
+          IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: !Ref sgCidr
+  
+  Subnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select 
+        - 0
+        - !GetAZs 
+          Ref: 'AWS::Region'
+      CidrBlock: !Join ["/", [!Select [0, !Ref subnetCidrBlocks], !Ref subnetCidrRange]]
+      Tags:
+        - Key: "Name"
+          Value: !Join ["-", [!Ref prefix, "subnet1"]]
+
+  Subnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select 
+        - 1
+        - !GetAZs 
+          Ref: 'AWS::Region'
+      CidrBlock: !Join ["/", [!Select [1, !Ref subnetCidrBlocks], !Ref subnetCidrRange]]
+      Tags:
+        - Key: "Name"
+          Value: !Join ["-", [!Ref prefix, "subnet2"]]
+  
+  Subnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select 
+        - 0
+        - !GetAZs 
+          Ref: 'AWS::Region'
+      CidrBlock: !Join ["/", [!Select [2, !Ref subnetCidrBlocks], !Ref subnetCidrRange]]
+      Tags:
+        - Key: "Name"
+          Value: !Join ["-", [!Ref prefix, "subnet3"]]
+  
+  Subnet4:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select 
+        - 1
+        - !GetAZs 
+          Ref: 'AWS::Region'
+      CidrBlock: !Join ["/", [!Select [3, !Ref subnetCidrBlocks], !Ref subnetCidrRange]]
+      Tags:
+        - Key: "Name"
+          Value: !Join ["-", [!Ref prefix, "subnet4"]]
+  
+  PublicRT:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags: 
+        - Key: "Name"
+          Value: !Join ["-", [!Ref prefix, "public", "table"]]
+  
+  PrivateRT:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags: 
+        - Key: "Name"
+          Value: !Join ["-", [!Ref prefix, "private", "table"]]
+  
+  RouteSubnet1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRT
+      SubnetId: !Ref Subnet1
+  
+  RouteSubnet2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRT
+      SubnetId: !Ref Subnet2
+
+  RouteSubnet3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRT
+      SubnetId: !Ref Subnet3
+  
+  RouteSubnet4:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRT
+      SubnetId: !Ref Subnet4
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: 
+        - Key: "Name"
+          Value: !Join ["-", [!Ref prefix, "ig"]]
+  
+  VpcIgAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  RouteIG:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRT
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Condition: EnabledNatGateway
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: EnabledNatGateway
+    Properties:
+      AllocationId: !GetAtt ElasticIP.AllocationId
+      SubnetId: !Ref Subnet1
+
+  RouteNatGateway:
+    Type: AWS::EC2::Route
+    DependsOn: [ NatGateway ]
+    Condition: EnabledNatGateway
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref NatGateway
+      RouteTableId: !Ref PrivateRT
+
+Outputs:
+  VPCId:
+      Value: !Ref VPC
+      Export:
+        Name: !Sub "${AWS::StackName}-vpc-id"
+
+  Subnet1Id:
+    Value: !Ref Subnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-subnet1-id"
+  
+  Subnet2Id:
+    Value: !Ref Subnet2
+    Export:
+      Name: !Sub "${AWS::StackName}-subnet2-id"
+    
+  Subnet3Id:
+    Value: !Ref Subnet3
+    Export:
+      Name: !Sub "${AWS::StackName}-subnet3-id"
+    
+  Subnet4Id:
+    Value: !Ref Subnet4
+    Export:
+      Name: !Sub "${AWS::StackName}-subnet4-id"
+  
+  PublicRTId:
+    Value: !Ref PublicRT
+    Export:
+      Name: !Sub "${AWS::StackName}-public-rt-id"
+  
+  PrivateRTId:
+    Value: !Ref PrivateRT
+    Export:
+      Name: !Sub "${AWS::StackName}-private-rt-id"
+
+  DMZSecurityGroup:
+    Value: !Ref DMZSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-dmz-sg"
+  
+  DefaultSecurityGroup:
+    Value: !GetAtt VPC.DefaultSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-default-sg"
